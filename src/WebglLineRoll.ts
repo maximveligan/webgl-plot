@@ -48,13 +48,24 @@ export class WebglLineRoll {
         uniform float uShift;
         uniform vec4 uColor;
 
-        out vec3 vColor;
-    
+        out vec4 vColor;
+
         void main(void) {
             vec2 shiftedPosition = a_position - vec2(uShift, 0);
             gl_Position = vec4(shiftedPosition, 0, 1);
 
-            vColor = a_color;
+            vec3 green = vec3(0.0, 1.0, 0.0);
+            vec3 red = vec3(1.0, 0.0, 0.0);
+            vec3 blue = vec3(0.0, 0.0, 1.0);
+            float intensity = clamp(abs(a_position.y) * 2.0, 0.0, 1.0);
+
+            if (a_position.y > 0.0) {
+              vColor = vec4(mix(green, red, intensity), 0.7);
+            }  else if (a_position.y < 0.0) {
+              vColor = vec4(mix(green, blue, intensity), 0.7);
+            } else {
+              vColor = vec4(0.3, 0.3, 0.3, 0.3);
+            }
         }`;
 
     const vertShader = this.gl.createShader(this.gl.VERTEX_SHADER);
@@ -72,11 +83,11 @@ export class WebglLineRoll {
     // Fragment shader source code
     const fragCode = `#version 300 es
         precision mediump float;    
-        in vec3 vColor;
+        in vec4 vColor;
         out vec4 outColor;
     
         void main(void) {
-            outColor = vec4(vColor, 0.7);
+            outColor = vColor;
         }`;
 
     const fragShader = this.gl.createShader(this.gl.FRAGMENT_SHADER);
