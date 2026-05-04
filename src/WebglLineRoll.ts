@@ -4,6 +4,7 @@ import { DebugLogger } from "./DebugLogger";
 export class WebglLineRoll {
   private gl: WebGL2RenderingContext;
   private aPositionLocation: number;
+  private aOpacityLocation: number;
   private vertexBuffer: WebGLBuffer;
   public program: WebGLProgram;
   public rollBufferSize: number;
@@ -12,11 +13,10 @@ export class WebglLineRoll {
   private dataX: number;
   private lastDataX: number[];
   private lastDataY: number[];
+  private lastOpacity: number[];
   public numLines: number;
   private filled: number;
   private ext: WEBGL_multi_draw | null;
-  private colorBuffer: WebGLBuffer;
-  private aColorLocation: number;
   private uShiftLocation: WebGLUniformLocation;
   private uploadScratch: Float32Array[];
   private bridgeScratch: Float32Array;
@@ -31,6 +31,7 @@ export class WebglLineRoll {
     this.dataX = 1;
     this.lastDataX = Array(numLines).fill(0);
     this.lastDataY = Array(numLines).fill(0);
+    this.lastOpacity = Array(numLines).fill(0);
     this.numLines = numLines;
     this.filled = 0;
     this.uploadScratch = Array.from({ length: numLines }, () => new Float32Array(0));
@@ -43,11 +44,9 @@ export class WebglLineRoll {
 
     const vertCode = `#version 300 es
         layout(location = 1) in vec2 a_position;
-        layout(location = 2) in vec3 a_color;
+        layout(location = 2) in float a_opacity;
 
         uniform float uShift;
-        uniform vec4 uColor;
-
         out vec4 vColor;
 
         void main(void) {
@@ -60,11 +59,11 @@ export class WebglLineRoll {
             float intensity = clamp(abs(a_position.y) * 2.0, 0.0, 1.0);
 
             if (a_position.y > 0.0) {
-              vColor = vec4(mix(green, red, intensity), 0.7);
+              vColor = vec4(mix(green, red, intensity), clamp(a_opacity * 3.0, 0.1, 1.0));
             }  else if (a_position.y < 0.0) {
-              vColor = vec4(mix(green, blue, intensity), 0.7);
+              vColor = vec4(mix(green, blue, intensity), clamp(a_opacity * 3.0, 0.1, 1.0));
             } else {
-              vColor = vec4(0.3, 0.3, 0.3, 0.3);
+              vColor = vec4(0.3, 0.3, 0.3, 0.1);
             }
         }`;
 
@@ -119,43 +118,24 @@ export class WebglLineRoll {
     this.gl.bindBuffer(this.gl.ARRAY_BUFFER, this.vertexBuffer);
     this.gl.bufferData(
       this.gl.ARRAY_BUFFER,
-      new Float32Array((this.rollBufferSize + 2) * 2 * numLines),
+      new Float32Array((this.rollBufferSize + 2) * 3 * numLines),
       this.gl.DYNAMIC_DRAW
     );
 
+    const stride = 3 * 4; // the 3 is x y and opacity, the 4 is 4 bytes per f32
     this.aPositionLocation = this.gl.getAttribLocation(this.program, "a_position");
-    this.gl.vertexAttribPointer(this.aPositionLocation, 2, this.gl.FLOAT, false, 0, 0);
+    this.aOpacityLocation = this.gl.getAttribLocation(this.program, "a_opacity");
+
+    this.gl.vertexAttribPointer(this.aPositionLocation, 2, this.gl.FLOAT, false, stride, 0);
     this.gl.enableVertexAttribArray(this.aPositionLocation);
 
-    // Create a buffer for the colors
-    this.colorBuffer = this.gl.createBuffer();
-
-    const colors = Array((this.rollBufferSize + 2) * 3 * numLines).fill(128);
-
-    this.gl.bindBuffer(this.gl.ARRAY_BUFFER, this.colorBuffer);
-    this.gl.bufferData(
-      this.gl.ARRAY_BUFFER,
-      new Uint8Array(colors),
-      this.gl.STATIC_DRAW
-    );
-
-    this.aColorLocation = this.gl.getAttribLocation(this.program, "a_color");
-    this.gl.vertexAttribPointer(
-      this.aColorLocation,
-      3,
-      this.gl.UNSIGNED_BYTE,
-      true,
-      0,
-      0
-    );
-    this.gl.enableVertexAttribArray(this.aColorLocation);
+    this.gl.vertexAttribPointer(this.aOpacityLocation, 1, this.gl.FLOAT, false, stride, 8);
+    this.gl.enableVertexAttribArray(this.aOpacityLocation);
 
     this.uShiftLocation = this.gl.getUniformLocation(this.program, "uShift")!;
-
-    //this.uColorLocation = this.gl.getUniformLocation(this.program, "uColor");
   }
 
-  addPoint(ys: number[]) {
+  addPoint(ys: number[], opacity: number[]) {
     const bfsize = this.rollBufferSize + 2;
     this.shift += 2 / this.rollBufferSize;
     this.dataX += 2 / this.rollBufferSize;
@@ -166,8 +146,8 @@ export class WebglLineRoll {
     for (let i = 0; i < this.numLines; i++) {
       this.gl.bufferSubData(
         this.gl.ARRAY_BUFFER,
-        (this.dataIndex + bfsize * i) * 2 * 4,
-        new Float32Array([this.dataX, ys[i]])
+        (this.dataIndex + bfsize * i) * 3 * 4,
+        new Float32Array([this.dataX, ys[i], opacity[i]])
       );
     }
 
@@ -177,6 +157,7 @@ export class WebglLineRoll {
       for (let i = 0; i < this.numLines; i++) {
         this.lastDataX[i] = this.dataX;
         this.lastDataY[i] = ys[i];
+        this.lastOpacity[i] = opacity[i];
       }
     }
 
@@ -184,12 +165,10 @@ export class WebglLineRoll {
       for (let i = 0; i < this.numLines; i++) {
         this.gl.bufferSubData(
           this.gl.ARRAY_BUFFER,
-          (this.rollBufferSize + bfsize * i) * 2 * 4,
+          (this.rollBufferSize + bfsize * i) * 3 * 4,
           new Float32Array([
-            this.lastDataX[i],
-            this.lastDataY[i],
-            this.dataX,
-            ys[i],
+            this.lastDataX[i], this.lastDataY[i], this.lastOpacity[i],
+            this.dataX, ys[i], opacity[i]
           ])
         );
       }
@@ -398,7 +377,6 @@ export class WebglLineRoll {
 
   setLineColor(colors: ColorRGBA, lineIndex: number) {
     this.gl.useProgram(this.program);
-    this.gl.bindBuffer(this.gl.ARRAY_BUFFER, this.colorBuffer);
 
     const colorsArray = [];
     for (let i = 0; i < this.rollBufferSize + 2; i++) {
@@ -413,6 +391,5 @@ export class WebglLineRoll {
       new Uint8Array(colorsArray)
     );
 
-    this.gl.enableVertexAttribArray(this.aColorLocation);
   }
 }
